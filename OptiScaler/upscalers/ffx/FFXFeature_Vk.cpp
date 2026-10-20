@@ -305,9 +305,42 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
     {
         LOG_DEBUG("MotionVectors exist..");
 
-        params.motionVectors = ffxApiGetResourceVK(paramVelocity->Resource.ImageViewInfo.Image,
-                                                   ffxApiGetImageResourceDescriptionVKLocal(paramVelocity),
-                                                   FFX_API_RESOURCE_STATE_COMPUTE_READ);
+        auto mvFormat = paramVelocity->Resource.ImageViewInfo.Format;
+        bool converted = false;
+
+        // FFX has no R16G16_SNORM/UNORM surface format, ffxApiGetSurfaceFormatVKLocal maps SNORM to
+        // R8G8B8A8_SNORM which makes FSR read two 16-bit components as four 8-bit ones (Enshrouded).
+        // Convert to an R16G16_SFLOAT intermediate first.
+        if (mvFormat == VK_FORMAT_R16G16_SNORM || mvFormat == VK_FORMAT_R16G16_UNORM)
+        {
+            if (_velocityConvert == nullptr)
+                _velocityConvert = std::make_unique<VelocityConvert_Vk>("VelocityConvert", Device, PhysicalDevice);
+
+            if (_velocityConvert->CanRender() &&
+                _velocityConvert->Convert(InCmdBuffer, paramVelocity->Resource.ImageViewInfo.ImageView,
+                                          { paramVelocity->Resource.ImageViewInfo.Width,
+                                            paramVelocity->Resource.ImageViewInfo.Height }))
+            {
+                LOG_DEBUG("Converted motion vectors ({}) to R16G16_SFLOAT intermediate", (uint32_t) mvFormat);
+
+                auto desc = ffxApiGetImageResourceDescriptionVKLocal(paramVelocity);
+                desc.format = FFX_API_SURFACE_FORMAT_R16G16_FLOAT;
+                params.motionVectors = ffxApiGetResourceVK(_velocityConvert->IntermediateImage(), desc,
+                                                           FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                converted = true;
+            }
+            else
+            {
+                LOG_WARN("Motion vector conversion failed, passing original resource");
+            }
+        }
+
+        if (!converted)
+        {
+            params.motionVectors = ffxApiGetResourceVK(paramVelocity->Resource.ImageViewInfo.Image,
+                                                       ffxApiGetImageResourceDescriptionVKLocal(paramVelocity),
+                                                       FFX_API_RESOURCE_STATE_COMPUTE_READ);
+        }
     }
     else
     {

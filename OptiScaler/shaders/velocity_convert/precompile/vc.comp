@@ -1,0 +1,21 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+// Velocity convert: R16G16_SNORM / R16G16_UNORM motion vectors -> R16G16_SFLOAT.
+// The FFX Vulkan backend has no R16G16_SNORM surface format. Reading through the
+// game's SNORM view yields normalized floats, which are stored as fp16.
+// Destination has no format qualifier: relies on shaderStorageImageWriteWithoutFormat,
+// which Vulkan_Spoofing already enables for the other OptiScaler shaders.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform texture2D SourceTexture;
+layout(set = 0, binding = 1) uniform writeonly image2D DestinationTexture;
+
+void main()
+{
+    ivec2 size = imageSize(DestinationTexture);
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= size.x || pos.y >= size.y)
+        return;
+    vec2 v = texelFetch(SourceTexture, pos, 0).xy;
+    imageStore(DestinationTexture, pos, vec4(v, 0.0, 0.0));
+}
